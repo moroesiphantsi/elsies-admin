@@ -8,8 +8,6 @@
     "@capacitor/core": "^7.4.3",
     "@emotion/react": "^11.13.3",
     "@emotion/styled": "^11.13.0",
-    "@ionic/react": "^8.7.3",
-    "@ionic/react-router": "^8.7.3",
     "@mui/icons-material": "^6.1.6",
     "@mui/material": "^6.1.6",
     "@testing-library/jest-dom": "^5.17.0",
@@ -53,8 +51,5 @@
       "last 1 firefox version",
       "last 1 safari version"
     ]
-  },
-  "devDependencies": {
-    "typescript": "^5.9.2"
   }
 }
