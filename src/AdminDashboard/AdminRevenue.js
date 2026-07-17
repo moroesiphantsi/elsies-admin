@@ -49,8 +49,9 @@ function AdminRevenue() {
   const [staffPin, setStaffPin] = useState("POS-01"); 
   const [discountValue, setDiscountValue] = useState(0); 
 
-  // Dynamic Service options extracted from your real-time database records
-  const [dynamicServices, setDynamicServices] = useState([]);
+  // Dynamic Service list fetched directly from (db, "services")
+  const [dbServices, setDbServices] = useState([]);
+  const [isCustomService, setIsCustomService] = useState(false);
 
   const [form, setForm] = useState({
     customer: "Walk-In Customer",
@@ -60,79 +61,93 @@ function AdminRevenue() {
     quantity: "1",
     amount: "0", 
     paymentMethod: "Cash",
-    status: "Paid",
 
+    status: "Paid",
     notes: ""
   });
 
-  // 1. Read real-time revenue and service data from Firebase
+  // 1. Read real-time revenue data AND services database from Firebase
   useEffect(() => {
+    // A. Read revenues data
     const revenueRef = ref(database, "revenues");
     onValue(revenueRef, (snapshot) => {
       const data = snapshot.val();
       if (data) {
-        const loadedRevenues = Object.entries(data).map(([id, value]) => ({
-          id,
-          ...value
-        }));
-        setRevenues(loadedRevenues);
-
-        // Extract unique service list dynamically from DB history
-        const servicesMap = {};
-        loadedRevenues.forEach(item => {
-          if (item.service) {
-            // Store the most recent unit price recorded for this service in the DB
-
-            const calculatedUnitPrice = item.unitPrice || 
-              (parseFloat(item.amount) / (parseInt(item.quantity) || 1)).toFixed(2);
-            
-            servicesMap[item.service.trim()] = parseFloat(calculatedUnitPrice) || 0;
-          }
-        });
-
-        const uniqueServices = Object.entries(servicesMap).map(([name, basePrice]) => ({
-          name,
-          basePrice
-        }));
-
-        setDynamicServices(uniqueServices);
-
-        // Set default service in form if empty
-        if (uniqueServices.length > 0 && !form.service) {
-          setForm(prev => ({
-            ...prev,
-
-            service: uniqueServices[0].name,
-            unitPrice: uniqueServices[0].basePrice.toString(),
-            amount: (uniqueServices[0].basePrice * (parseInt(prev.quantity) || 1)).toFixed(2)
-          }));
-        }
+        setRevenues(
+          Object.entries(data).map(([id, value]) => ({
+            id,
+            ...value
+          }))
+        );
       } else {
         setRevenues([]);
-        setDynamicServices([]);
+      }
+    });
+
+    // B. Read services and prices dynamically from 
+
+(db, "services")
+    const servicesRef = ref(database, "services");
+    onValue(servicesRef, (snapshot) => {
+      const data = snapshot.val();
+      if (data) {
+        // Formats services whether they are saved as an array or map/object
+        const loadedServices = Object.entries(data).map(([id, value]) => ({
+          id,
+          name: value.name || value.serviceName || id,
+          price: parseFloat(value.price || value.basePrice || 0)
+        }));
+        setDbServices(loadedServices);
+
+        // Auto-assign the first service as a fallback if nothing is selected yet
+        if (loadedServices.length > 0) {
+          setForm(prev => {
+            if (!prev.service) {
+              const defaultService = loadedServices[0];
+              return {
+                ...prev,
+
+                service: defaultService.name,
+                unitPrice: defaultService.price.toString(),
+                amount: (defaultService.price * (parseInt(prev.quantity) || 1)).toFixed(2)
+              };
+            }
+            return prev;
+          });
+        }
+      } else {
+        setDbServices([]);
+        setIsCustomService(true); // Force custom inputs if DB has no pre-saved services
       }
     });
   }, [form.service]);
 
-  // 2. Recalculates amount dynamically when service, price, or quantity updates
+  // 2. Dynamic Recalculations
   const handleFormUpdate = (fieldName, value) => {
     const updatedForm = { ...form, [fieldName]: value };
 
-    // Auto-pull dynamic unit price if a recorded service is selected
+    // When dropdown changes, pull corresponding price from dbServices
     if (fieldName === "service") {
-
-      const serviceObj = dynamicServices.find(s => s.name === value);
-      if (serviceObj) {
-        updatedForm.unitPrice = serviceObj.basePrice.toString();
+      if (value === "Custom/New Service") {
+        setIsCustomService(true);
+        updatedForm.service = "";
+        updatedForm.unitPrice = "0";
+      } else {
+        setIsCustomService(false);
+        const selectedServiceObj = dbServices.find(s => s.name === value);
+        if (selectedServiceObj) {
+          updatedForm.unitPrice = selectedServiceObj.price.toString();
+        }
       }
     }
 
-    // Dynamic Price Calculation (Quantity * Unit Price)
+    // Multiplication (Quantity * Unit Price)
     const qty = parseInt(updatedForm.quantity) || 1;
     const price = parseFloat(updatedForm.unitPrice) || 0;
     const computedTotal = qty * price;
     
-    // Apply discount rate (if any)
+
+    // Apply optional discount percentage
     const discountFactor = 1 - (discountValue / 100);
     updatedForm.amount = (computedTotal * discountFactor).toFixed(2);
     setForm(updatedForm);
@@ -142,7 +157,7 @@ function AdminRevenue() {
     handleFormUpdate(e.target.name, e.target.value);
   };
 
-  // Quick discount calculations
+  // Quick discount calculation buttons
   const applyQuickDiscount = (pct) => {
     setDiscountValue(pct);
     const qty = parseInt(form.quantity) || 1;
@@ -151,8 +166,9 @@ function AdminRevenue() {
     setForm({ ...form, amount: total.toFixed(2) });
   };
 
-  // Dynamic cash register change calculator
+  // Live change register feedback
   useEffect(() => {
+
     const totalWithTip = parseFloat(form.amount) * (1 + parseFloat(addTaxTip) / 100);
     const tendered = parseFloat(cashTendered) || 0;
     if (tendered >= totalWithTip) {
@@ -160,19 +176,19 @@ function AdminRevenue() {
     } else {
       setCashChange(0);
     }
-
   }, [cashTendered, form.amount, addTaxTip]);
 
-  // 3. Save directly to Firebase Database
+  // 3. Process POS Transaction Save
   const saveRevenue = () => {
     if (!form.customer || !form.service || !form.amount) {
-      return alert("Please complete customer service details.");
+      return alert("Please enter custom service name, customer name, and pricing.");
     }
     const finalCalculatedAmount = parseFloat(form.amount) * (1 + parseFloat(addTaxTip) / 100);
     const revenueData = {
       ...form,
       amount: finalCalculatedAmount.toFixed(2),
       discountApplied: `${discountValue}%`,
+
       tipApplied: `${addTaxTip}%`,
       clerkId: staffPin,
       date: new Date().toLocaleDateString(),
@@ -186,7 +202,7 @@ function AdminRevenue() {
       push(ref(database, "revenues"), revenueData);
     }
 
-    // Set Receipt Modal view state
+    // Set preview details for the slip
     setActiveSlip({
       ...revenueData,
       subtotal: (parseFloat(form.unitPrice) * parseInt(form.quantity)).toFixed(2),
@@ -195,18 +211,20 @@ function AdminRevenue() {
     });
     setIsSlipOpen(true);
 
-    // Reset Form to default inputs
+
+    // Reset checkout form
     setForm({
       customer: "Walk-In Customer",
       orderId: `IN-${Math.floor(100000 + Math.random() * 900000)}`,
-      service: dynamicServices[0]?.name || "",
-      unitPrice: dynamicServices[0]?.basePrice.toString() || "0",
+      service: dbServices[0]?.name || "",
+      unitPrice: dbServices[0]?.price.toString() || "0",
       quantity: "1",
-      amount: dynamicServices[0]?.basePrice.toString() || "0",
+      amount: dbServices[0]?.price.toString() || "0",
       paymentMethod: "Cash",
       status: "Paid",
       notes: ""
     });
+    setIsCustomService(false);
     setCashTendered("");
     setDiscountValue(0);
     setAddTaxTip("0");
@@ -216,16 +234,17 @@ function AdminRevenue() {
     setEditId(item.id);
     setForm({
       customer: item.customer,
+
       orderId: item.orderId || `IN-${Math.floor(100000 + Math.random() * 900000)}`,
       service: item.service,
       unitPrice: item.unitPrice || (parseFloat(item.amount) / (parseInt(item.quantity) || 1)).toFixed(2),
       quantity: (item.quantity || "1").toString(),
-
       amount: item.amount,
       paymentMethod: item.paymentMethod || "Cash",
       status: item.status || "Paid",
       notes: item.notes || ""
     });
+    setIsCustomService(true); // Open edit inputs to manual override
   };
 
   const deleteRevenue = (id) => {
@@ -241,7 +260,6 @@ function AdminRevenue() {
       tenderedAmount: item.amount,
       changeDue: "0.00"
     });
-
     setIsSlipOpen(true);
   };
 
@@ -258,7 +276,6 @@ function AdminRevenue() {
   const chartData = revenues.map(item => ({
     date: item.date,
     amount: Number(item.amount)
-
   }));
 
   const exportRevenueExcel = () => {
@@ -274,13 +291,13 @@ function AdminRevenue() {
       "Date": item.date,
       "Time": item.time,
       "Notes": item.notes || "-"
+
     }));
     const worksheet = XLSX.utils.json_to_sheet(excelData);
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, worksheet, "Indoor Revenue POS");
     XLSX.writeFile(workbook, "Elsies_Indoor_Purchases_Report.xlsx");
   };
-
 
   const printSlipElement = () => {
     window.print();
@@ -295,6 +312,7 @@ function AdminRevenue() {
 
       {/* STATS OVERVIEW */}
       <section className="revenue-stats">
+
         <div>
           <FaMoneyBillWave />
           <h2>R {totalRevenue.toFixed(2)}</h2>
@@ -304,7 +322,6 @@ function AdminRevenue() {
           <FaChartLine />
           <h2>R {paidRevenue.toFixed(2)}</h2>
           <p>Paid Slip Settled</p>
-
         </div>
         <div>
           <FaReceipt />
@@ -319,6 +336,7 @@ function AdminRevenue() {
         
         <div className="pos-input-grid">
           <div>
+
             <label className="pos-label">Customer Reference</label>
             <input
               name="customer"
@@ -327,7 +345,6 @@ function AdminRevenue() {
               onChange={handleChange}
             />
           </div>
-
           <div>
             <label className="pos-label">Generated Slip / ID</label>
             <input
@@ -341,41 +358,34 @@ function AdminRevenue() {
 
         <div className="pos-input-grid text-left-grid">
           <div>
-            <label className="pos-label">Service Rendered (From Live Database)</label>
-            <div className="service-selection-wrapper">
-              {dynamicServices.length > 0 ? (
-                <select
-                  name="service"
-                  value={form.service}
-                  onChange={handleChange}
 
-                >
-                  {dynamicServices.map((s, idx) => (
-                    <option key={idx} value={s.name}>
-                      {s.name} (R{s.basePrice})
-                    </option>
-                  ))}
-                  <option value="Custom/New Service">-- Type custom service below --</option>
-                </select>
-              ) : (
+            <label className="pos-label">Service Rendered (From (db, services))</label>
+            <div className="service-selection-wrapper">
+              <select
+                name="service"
+                value={isCustomService ? "Custom/New Service" : form.service}
+                onChange={handleChange}
+              >
+                {dbServices.map((s, idx) => (
+                  <option key={idx} value={s.name}>
+                    {s.name} (R{s.price})
+                  </option>
+                ))}
+                <option value="Custom/New Service">✍️ Custom/New Service (Write below)</option>
+              </select>
+            </div>
+
+            {/* Custom Input: Displays when user clicks "Custom/New Service" or if (db, services) is empty */}
+            {(isCustomService || dbServices.length === 0) && (
+              <div className="custom-service-field-wrapper" style={{ marginTop: '10px' }}>
+                <label className="pos-label" style={{ color: '#d4af37' }}>Write Custom Service Name:</label>
                 <input
                   name="service"
-                  placeholder="Enter new service type..."
+                  placeholder="Type custom service name here..."
                   value={form.service}
                   onChange={handleChange}
                 />
-              )}
-            </div>
-
-            {/* fallback input block if they select Custom/New Service or DB is empty */}
-            {(dynamicServices.length === 0 || form.service === "Custom/New Service") && (
-              <input
-
-                name="service"
-                placeholder="Type new custom service name here..."
-                style={{ marginTop: '10px' }}
-                onChange={(e) => handleFormUpdate("service", e.target.value)}
-              />
+              </div>
             )}
           </div>
 
@@ -385,13 +395,15 @@ function AdminRevenue() {
               <input
                 type="number"
                 name="unitPrice"
+
                 value={form.unitPrice}
                 onChange={handleChange}
+                readOnly={!isCustomService && dbServices.length > 0}
+                style={{ backgroundColor: (!isCustomService && dbServices.length > 0) ? '#f1f5f9' : '#fff' }}
               />
             </div>
             <div>
               <label className="pos-label">Quantity</label>
-
               <input
                 type="number"
                 name="quantity"
@@ -403,6 +415,7 @@ function AdminRevenue() {
             <div>
               <label className="pos-label">Net Subtotal</label>
               <input
+
                 type="text"
                 name="amount"
                 value={`R ${form.amount}`}
@@ -415,7 +428,6 @@ function AdminRevenue() {
 
         {/* PAYMENT SYSTEM */}
         <div className="pos-advanced-wrapper">
-
           <div className="advanced-column">
             <label className="pos-label">Payment Method</label>
             <select
@@ -425,6 +437,7 @@ function AdminRevenue() {
             >
               <option value="Cash">Cash Transaction</option>
               <option value="Bank Card">Bank Card POS Swipe</option>
+
             </select>
           </div>
           <div className="advanced-column">
@@ -436,6 +449,7 @@ function AdminRevenue() {
               <button type="button" onClick={() => applyQuickDiscount(15)} className={discountValue === 15 ? "active" : ""}>15%</button>
             </div>
           </div>
+
           <div className="advanced-column">
             <label className="pos-label">Status</label>
             <select
@@ -446,7 +460,6 @@ function AdminRevenue() {
               <option value="Paid">Fully Paid</option>
               <option value="Pending">Lay-by / Pending</option>
             </select>
-
           </div>
         </div>
 
@@ -456,6 +469,7 @@ function AdminRevenue() {
             <div className="calc-body">
               <div>
                 <label>Cash Tendered by Customer (R)</label>
+
                 <input
                   type="number"
                   placeholder="e.g. 200"
@@ -467,7 +481,6 @@ function AdminRevenue() {
                 <span>Change Due:</span>
                 <h3>R {cashChange.toFixed(2)}</h3>
               </div>
-
             </div>
           </div>
         )}
@@ -477,6 +490,7 @@ function AdminRevenue() {
             <label className="pos-label">Assigned POS Terminal</label>
             <select value={staffPin} onChange={(e) => setStaffPin(e.target.value)}>
               <option value="POS-01">Station 1 - Back Office Counter</option>
+
               <option value="POS-02">Station 2 - Front Desk Terminal</option>
               <option value="POS-Mobile">Station 3 - Floor Mobile Tablet</option>
             </select>
@@ -514,6 +528,7 @@ function AdminRevenue() {
           <FaSearch />
           <input
             placeholder="Search by customer name..."
+
             value={search}
             onChange={e => setSearch(e.target.value)}
           />
@@ -537,6 +552,7 @@ function AdminRevenue() {
               <th>Payment</th>
               <th>Status</th>
               <th>Slip</th>
+
               <th>Actions</th>
             </tr>
           </thead>
@@ -548,7 +564,6 @@ function AdminRevenue() {
                 <td>{item.quantity || 1}</td>
                 <td>R {parseFloat(item.amount).toFixed(2)}</td>
                 <td>
-
                   <span className={`payment-pill ${item.paymentMethod?.replace(" ", "-")}`}>
                     {item.paymentMethod}
                   </span>
@@ -559,6 +574,7 @@ function AdminRevenue() {
                   </span>
                 </td>
                 <td>
+
                   <button className="slip-btn-action" onClick={() => viewReceipt(item)}>
                     <FaReceipt /> View Slip
                   </button>
@@ -568,7 +584,6 @@ function AdminRevenue() {
                     <FaEdit />
                   </button>
                   <button className="row-action-btn delete" onClick={() => deleteRevenue(item.id)}>
-
                     <FaTrash />
                   </button>
                 </td>
@@ -581,6 +596,7 @@ function AdminRevenue() {
       {/* GROWTH CHART */}
       <section className="chart">
         <h2>Indoor Purchase Intake Trajectory</h2>
+
         <ResponsiveContainer width="100%" height={350}>
           <LineChart data={chartData}>
             <CartesianGrid strokeDasharray="3 3" />
@@ -591,7 +607,6 @@ function AdminRevenue() {
           </LineChart>
         </ResponsiveContainer>
       </section>
-
 
       {/* 2026 DIGITAL THERMAL RECEIPT MODAL */}
       {isSlipOpen && activeSlip && (
@@ -637,7 +652,6 @@ function AdminRevenue() {
                 <span>TOTAL DUE:</span>
                 <span>R {parseFloat(activeSlip.amount).toFixed(2)}</span>
               </div>
-
               <div className="receipt-row billing-meta">
                 <span>Payment Method:</span>
                 <span>{activeSlip.paymentMethod}</span>
@@ -655,7 +669,6 @@ function AdminRevenue() {
                 </>
               )}
               {activeSlip.notes && (
-
                 <div className="receipt-notes">
                   <strong>Notes:</strong> {activeSlip.notes}
                 </div>
@@ -675,7 +688,6 @@ function AdminRevenue() {
             </div>
           </div>
         </div>
-
       )}
     </div>
   );
