@@ -410,11 +410,11 @@ backgroundImage:`url(${heroBg})`
 
 <h1>
 
-Elsies Admin
+Elsies Back
 
 <span>
 
-Dashboard
+Office
 
 </span>
 
@@ -636,7 +636,7 @@ className="action-card"
 <FaCog/>
 
 <h3>
-Edit Revenue
+Indoors Purchases
 </h3>
 
 
