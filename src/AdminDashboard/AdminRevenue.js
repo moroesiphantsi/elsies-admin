@@ -86,7 +86,6 @@ function AdminRevenue() {
 
     // B. Read services and prices dynamically from 
 
-(db, "services")
     const servicesRef = ref(database, "services");
     onValue(servicesRef, (snapshot) => {
       const data = snapshot.val();
